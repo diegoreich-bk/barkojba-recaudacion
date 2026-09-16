@@ -45,8 +45,23 @@ module.exports = async function handler(req, res) {
       const ext = safePart(fileName.split('.').pop() || 'bin');
       const pathname = `receipts/${month.slice(0,7)}/${safePart(playerName)}-${Date.now()}.${ext}`;
       const validUntil = Date.now() + 10 * 60 * 1000;
-      const token = await issueSignedToken({ pathname, operations: ['put'], validUntil });
-      const { presignedUrl } = await presignUrl(token, { pathname, operation: 'put', access: 'private', validUntil });
+      const token = await issueSignedToken({
+        pathname,
+        operations: ['put'],
+        allowedContentTypes: allowed,
+        maximumSizeInBytes: 5 * 1024 * 1024,
+        validUntil
+      });
+      const { presignedUrl } = await presignUrl(token, {
+        pathname,
+        operation: 'put',
+        access: 'private',
+        allowedContentTypes: allowed,
+        maximumSizeInBytes: 5 * 1024 * 1024,
+        addRandomSuffix: false,
+        allowOverwrite: false,
+        validUntil
+      });
       return json(res, 200, { upload_url: presignedUrl, pathname });
     }
 
