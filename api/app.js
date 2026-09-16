@@ -1,5 +1,6 @@
 const { neon } = require('@neondatabase/serverless');
-const { issueSignedToken, presignUrl } = require('@vercel/blob');
+const { issueSignedToken, presignUrl, get } = require('@vercel/blob');
+const { Readable } = require('node:stream');
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -19,7 +20,8 @@ function safePart(value) {
 }
 
 function isAdmin(req) {
-  return String(req.headers['x-admin-pin'] || '') === String(process.env.ADMIN_PIN || '1234');
+  const supplied = req.headers['x-admin-pin'] || req.query?.pin || '';
+  return String(supplied) === String(process.env.ADMIN_PIN || '1234');
 }
 
 module.exports = async function handler(req, res) {
@@ -63,6 +65,30 @@ module.exports = async function handler(req, res) {
         validUntil
       });
       return json(res, 200, { upload_url: presignedUrl, pathname });
+    }
+
+    if (action === 'receipt-file' && req.method === 'GET') {
+      if (!isAdmin(req)) return json(res, 401, { error: 'PIN de administrador requerido' });
+      const pathname = String(req.query?.pathname || '');
+      if (!pathname.startsWith('receipts/')) return json(res, 400, { error: 'Comprobante inválido' });
+
+      const result = await get(pathname, { access: 'private' });
+      if (!result || result.statusCode !== 200) {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.end('Comprobante no encontrado');
+      }
+
+      const filename = pathname.split('/').pop() || 'comprobante';
+      res.statusCode = 200;
+      res.setHeader('Content-Type', result.blob.contentType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/"/g, '')}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-cache');
+      if (result.blob.etag) res.setHeader('ETag', result.blob.etag);
+
+      Readable.fromWeb(result.stream).pipe(res);
+      return;
     }
 
     if (action === 'receipt-url' && req.method === 'GET') {
