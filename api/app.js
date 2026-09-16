@@ -46,7 +46,7 @@ module.exports = async function handler(req, res) {
       const pathname = `receipts/${month.slice(0,7)}/${safePart(playerName)}-${Date.now()}.${ext}`;
       const validUntil = Date.now() + 10 * 60 * 1000;
       const token = await issueSignedToken({ pathname, operations: ['put'], validUntil });
-      const { presignedUrl } = await presignUrl(token, { pathname, operation: 'put', validUntil });
+      const { presignedUrl } = await presignUrl(token, { pathname, operation: 'put', access: 'private', validUntil });
       return json(res, 200, { upload_url: presignedUrl, pathname });
     }
 
@@ -56,7 +56,7 @@ module.exports = async function handler(req, res) {
       if (!pathname.startsWith('receipts/')) return json(res, 400, { error: 'Comprobante inválido' });
       const validUntil = Date.now() + 5 * 60 * 1000;
       const token = await issueSignedToken({ pathname, operations: ['get'], validUntil });
-      const { presignedUrl } = await presignUrl(token, { pathname, operation: 'get', validUntil });
+      const { presignedUrl } = await presignUrl(token, { pathname, operation: 'get', access: 'private', validUntil });
       return json(res, 200, { url: presignedUrl });
     }
 
