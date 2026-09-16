@@ -1,8 +1,9 @@
 {
   "name": "barkojba-futbol",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.1"
+    "@neondatabase/serverless": "^1.0.1",
+    "@vercel/blob": "^2.6.1"
   }
 }
