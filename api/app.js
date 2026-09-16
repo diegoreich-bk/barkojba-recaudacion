@@ -1,4 +1,5 @@
 const { neon } = require('@neondatabase/serverless');
+const { issueSignedToken, presignUrl } = require('@vercel/blob');
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -8,6 +9,17 @@ function json(res, status, body) {
 
 function validMonth(value) {
   return /^2026-(0[3-9]|1[0-2])-01$/.test(String(value || ''));
+}
+
+function safePart(value) {
+  return String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '').slice(0, 80) || 'archivo';
+}
+
+function isAdmin(req) {
+  return String(req.headers['x-admin-pin'] || '') === String(process.env.ADMIN_PIN || '1234');
 }
 
 module.exports = async function handler(req, res) {
@@ -20,6 +32,34 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    if (action === 'receipt-upload-url' && req.method === 'POST') {
+      const fileName = String(body.file_name || '').trim();
+      const fileType = String(body.file_type || '').trim();
+      const fileSize = Number(body.file_size || 0);
+      const playerName = String(body.player_name || '').trim();
+      const month = String(body.month || '');
+      const allowed = ['image/jpeg','image/png','image/webp','application/pdf'];
+      if (!fileName || !playerName || !validMonth(month) || !allowed.includes(fileType) || fileSize <= 0 || fileSize > 5 * 1024 * 1024) {
+        return json(res, 400, { error: 'Comprobante inválido. Usá JPG, PNG, WEBP o PDF de hasta 5 MB.' });
+      }
+      const ext = safePart(fileName.split('.').pop() || 'bin');
+      const pathname = `receipts/${month.slice(0,7)}/${safePart(playerName)}-${Date.now()}.${ext}`;
+      const validUntil = Date.now() + 10 * 60 * 1000;
+      const token = await issueSignedToken({ pathname, operations: ['put'], validUntil });
+      const { presignedUrl } = await presignUrl(token, { pathname, operation: 'put', validUntil });
+      return json(res, 200, { upload_url: presignedUrl, pathname });
+    }
+
+    if (action === 'receipt-url' && req.method === 'GET') {
+      if (!isAdmin(req)) return json(res, 401, { error: 'PIN de administrador requerido' });
+      const pathname = String(req.query?.pathname || '');
+      if (!pathname.startsWith('receipts/')) return json(res, 400, { error: 'Comprobante inválido' });
+      const validUntil = Date.now() + 5 * 60 * 1000;
+      const token = await issueSignedToken({ pathname, operations: ['get'], validUntil });
+      const { presignedUrl } = await presignUrl(token, { pathname, operation: 'get', validUntil });
+      return json(res, 200, { url: presignedUrl });
+    }
+
     if (action === 'state' && req.method === 'GET') {
       const players = await sql`SELECT id, name FROM players WHERE active = TRUE ORDER BY name ASC`;
       const payments = await sql`
@@ -46,21 +86,24 @@ module.exports = async function handler(req, res) {
       const month = String(body.month || '');
       const amount = Number(body.amount || 0);
       const source = body.source === 'admin_manual' ? 'admin_manual' : 'player_report';
+      const receiptUrl = String(body.receipt_url || '').trim() || null;
       if (!playerName || !validMonth(month) || amount < 100000) return json(res, 400, { error: 'Datos de pago inválidos' });
+      if (receiptUrl && !receiptUrl.startsWith('receipts/')) return json(res, 400, { error: 'Comprobante inválido' });
       const playerRows = await sql`SELECT id FROM players WHERE name = ${playerName} AND active = TRUE LIMIT 1`;
       if (!playerRows.length) return json(res, 404, { error: 'Jugador no encontrado' });
       const playerId = playerRows[0].id;
       const status = source === 'admin_manual' ? 'validated' : 'pending_review';
       const rows = await sql`
-        INSERT INTO payments (player_id, month, amount, status, source, updated_at, validated_at)
-        VALUES (${playerId}, ${month}::date, ${amount}, ${status}, ${source}, NOW(), ${status === 'validated' ? new Date().toISOString() : null})
+        INSERT INTO payments (player_id, month, amount, status, source, receipt_url, updated_at, validated_at)
+        VALUES (${playerId}, ${month}::date, ${amount}, ${status}, ${source}, ${receiptUrl}, NOW(), ${status === 'validated' ? new Date().toISOString() : null})
         ON CONFLICT (player_id, month)
         DO UPDATE SET amount = EXCLUDED.amount, status = EXCLUDED.status, source = EXCLUDED.source,
+                      receipt_url = COALESCE(EXCLUDED.receipt_url, payments.receipt_url),
                       updated_at = NOW(), validated_at = CASE WHEN EXCLUDED.status = 'validated' THEN NOW() ELSE NULL END
         RETURNING id
       `;
       const paymentId = rows[0].id;
-      const actionText = source === 'admin_manual' ? 'Pago cargado manualmente y validado' : 'Pago informado';
+      const actionText = source === 'admin_manual' ? 'Pago cargado manualmente y validado' : (receiptUrl ? 'Pago informado con comprobante' : 'Pago informado');
       await sql`INSERT INTO payment_history (payment_id, action, status_to) VALUES (${paymentId}, ${actionText}, ${status})`;
       return json(res, 200, { ok: true });
     }
